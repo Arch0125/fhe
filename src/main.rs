@@ -1,19 +1,27 @@
+use std::env;
 use tfhe::{ConfigBuilder, generate_keys, set_server_key, FheUint8};
 use tfhe::prelude::*;
 use bincode; // Ensure you have `bincode` and `serde` in your Cargo.toml
 use sha3::{Digest, Keccak256};
 use std::fs::File;
 use std::io::prelude::*;
-
+use hex;
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 4 {
+        eprintln!("Usage: {} <to> <from> <amount>", args[0]);
+        std::process::exit(1);
+    }
+
+    let to: u64 = args[1].parse().expect("Invalid 'to' argument");
+    let from: u64 = args[2].parse().expect("Invalid 'from' argument");
+    let amount: u64 = args[3].parse().expect("Invalid 'amount' argument");
+
     let config = ConfigBuilder::default().build();
 
     // Client-side
     let (client_key, server_key) = generate_keys(config);
-
-    let clear_a = 2u8;
-    let clear_b = 3u8;
 
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone)]
@@ -28,49 +36,24 @@ fn main() {
         Account { account_addr: 3, balance: 100 },
     ];
 
-    
-
-    let a = FheUint8::encrypt(clear_a, &client_key);
-    let b = FheUint8::encrypt(clear_b, &client_key);
-
     let mut encrypted_balances: Vec<FheUint8> = accounts.iter()
         .map(|acc| FheUint8::encrypt(acc.balance as u8, &client_key))
         .collect();
 
+    set_server_key(server_key);
 
-        set_server_key(server_key);
+    let additional_encrypted_balance = FheUint8::encrypt(amount as u8, &client_key);
 
-    let additional_balance = 5u8;
-    let additional_encrypted_balance = FheUint8::encrypt(additional_balance, &client_key);
+    encrypted_balances[to as usize] += &additional_encrypted_balance;
+    encrypted_balances[from as usize] -= &additional_encrypted_balance;
 
-    for balance in encrypted_balances.iter_mut() {
-        *balance += &additional_encrypted_balance;
-    }
+let mut hasher = Keccak256::new();
 
-    // let mut hasher = Keccak256::new();
-    // hasher.update(&serialized_result);
-    // let hashed_result = hasher.finalize();
-    // let mut file = File::create("result.txt").expect("Unable to create file");
-    // file.write_all(&hashed_result).expect("Unable to write hash");
+for balance in &encrypted_balances {
+    let serialized_balance = bincode::serialize(balance).unwrap();
+    hasher.update(&serialized_balance);
+}
 
-    let decrypted_balances: Vec<u8> = encrypted_balances.iter()
-        .map(|balance| balance.decrypt(&client_key))
-        .collect();
-
-
-
-
-    for (index, balance) in decrypted_balances.iter().enumerate() {
-        println!("Decrypted balance for account {}: {}", index + 1, balance);
-    }
-
-    //Client-side
-    // let decrypted_result: u8 = result.decrypt(&client_key);
-
-    // let clear_result = clear_a * clear_b;
-
-    // println!("Decrypted result: {}", decrypted_result);
-    // println!("Clear result: {}", clear_result);
-
-    // assert_eq!(decrypted_result, clear_result);
+let hash_result = hasher.finalize();
+println!("{}", hex::encode(hash_result));
 }
